@@ -20,19 +20,29 @@ export class ResponseAborted extends Error {
  * If the `close` event is fired before the `finish` event, then we'll send the
  * `abort` signal.
  */
-export function createAbortController(response: Writable): AbortController {
+export function createAbortController(response: Writable): {
+  controller: AbortController
+  cleanup: () => void
+} {
   const controller = new AbortController()
 
   // If `finish` fires first, then `res.end()` has been called and the close is
   // just us finishing the stream on our side. If `close` fires first, then we
   // know the client disconnected before we finished.
-  response.once('close', () => {
+  const closeHandler = () => {
     if (response.writableFinished) return
 
     controller.abort(new ResponseAborted())
-  })
+  }
 
-  return controller
+  response.once('close', closeHandler)
+
+  const cleanup = () => {
+    // Remove the close event listener to allow garbage collection
+    response.removeListener('close', closeHandler)
+  }
+
+  return { controller, cleanup }
 }
 
 /**
@@ -43,14 +53,20 @@ export function createAbortController(response: Writable): AbortController {
  * the `abort` event will not fire if to data has been fully read (because that
  * will "close" the readable stream and nothing fires after that).
  */
-export function signalFromNodeResponse(response: Writable): AbortSignal {
+export function signalFromNodeResponse(response: Writable): {
+  signal: AbortSignal
+  cleanup: () => void
+} {
   const { errored, destroyed } = response
   if (errored || destroyed) {
-    return AbortSignal.abort(errored ?? new ResponseAborted())
+    return {
+      signal: AbortSignal.abort(errored ?? new ResponseAborted()),
+      cleanup: () => {}, // no-op cleanup for already aborted signals
+    }
   }
 
-  const { signal } = createAbortController(response)
-  return signal
+  const { controller, cleanup } = createAbortController(response)
+  return { signal: controller.signal, cleanup }
 }
 
 export class NextRequestAdapter {

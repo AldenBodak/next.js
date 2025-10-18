@@ -132,11 +132,16 @@ export async function pipeToNodeResponse(
 
     // Create a new AbortController so that we can abort the readable if the
     // client disconnects.
-    const controller = createAbortController(res)
+    const { controller, cleanup } = createAbortController(res)
 
     const writer = createWriterFromResponse(res, waitUntilForEnd)
 
-    await readable.pipeTo(writer, { signal: controller.signal })
+    try {
+      await readable.pipeTo(writer, { signal: controller.signal })
+    } finally {
+      // Clean up the abort signal event listeners to prevent memory leaks
+      cleanup()
+    }
   } catch (err: any) {
     // If this isn't related to an abort error, re-throw it.
     if (isAbortError(err)) return

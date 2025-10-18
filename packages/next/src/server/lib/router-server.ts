@@ -361,6 +361,8 @@ export async function initialize(opts: {
         req.url = origUrl
       }
 
+      const { signal: routeSignal, cleanup: cleanupRouteSignal } =
+        signalFromNodeResponse(res)
       const {
         finished,
         parsedUrl,
@@ -372,9 +374,11 @@ export async function initialize(opts: {
         req,
         res,
         isUpgradeReq: false,
-        signal: signalFromNodeResponse(res),
+        signal: routeSignal,
         invokedOutputs,
       })
+      // Clean up signal after routing resolution
+      cleanupRouteSignal()
 
       if (res.closed || res.finished) {
         return
@@ -828,12 +832,16 @@ export async function initialize(opts: {
           )
         },
       })
+      const { signal: upgradeSignal, cleanup: cleanupUpgradeSignal } =
+        signalFromNodeResponse(socket)
       const { matchedOutput, parsedUrl } = await resolveRoutes({
         req,
         res,
         isUpgradeReq: true,
-        signal: signalFromNodeResponse(socket),
+        signal: upgradeSignal,
       })
+      // Clean up signal after routing resolution
+      cleanupUpgradeSignal()
 
       // TODO: allow upgrade requests to pages/app paths?
       // this was not previously supported

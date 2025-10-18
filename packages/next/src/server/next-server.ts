@@ -1692,6 +1692,9 @@ export default class NextNodeServer extends BaseServer<
     })
 
     const method = (params.request.method || 'GET').toUpperCase()
+    const { signal, cleanup: cleanupSignal } = signalFromNodeResponse(
+      params.response.originalResponse
+    )
     const requestData = {
       headers: params.request.headers,
       method,
@@ -1708,7 +1711,7 @@ export default class NextNodeServer extends BaseServer<
           ? (getRequestMeta(params.request, 'clonableBody') as any)
           : undefined,
 
-      signal: signalFromNodeResponse(params.response.originalResponse),
+      signal,
       waitUntil: this.getWaitUntil(),
     }
     let result:
@@ -1749,19 +1752,26 @@ export default class NextNodeServer extends BaseServer<
         if (hasRequestBody) {
           requestData.body.finalize()
         }
+        // Clean up the abort signal event listeners to prevent memory leaks
+        cleanupSignal()
       }
     } else {
       const { run } = require('./web/sandbox') as typeof import('./web/sandbox')
 
-      result = await run({
-        distDir: this.distDir,
-        name: middlewareInfo.name,
-        paths: middlewareInfo.paths,
-        edgeFunctionEntry: middlewareInfo,
-        request: requestData,
-        useCache: true,
-        onWarning: params.onWarning,
-      })
+      try {
+        result = await run({
+          distDir: this.distDir,
+          name: middlewareInfo.name,
+          paths: middlewareInfo.paths,
+          edgeFunctionEntry: middlewareInfo,
+          request: requestData,
+          useCache: true,
+          onWarning: params.onWarning,
+        })
+      } finally {
+        // Clean up the abort signal event listeners to prevent memory leaks
+        cleanupSignal()
+      }
     }
 
     if (!this.renderOpts.dev) {
@@ -2026,71 +2036,78 @@ export default class NextNodeServer extends BaseServer<
     }
 
     const { run } = require('./web/sandbox') as typeof import('./web/sandbox')
-    const result = await run({
-      distDir: this.distDir,
-      name: edgeInfo.name,
-      paths: edgeInfo.paths,
-      edgeFunctionEntry: edgeInfo,
-      request: {
-        headers: params.req.headers,
-        method: params.req.method,
-        nextConfig: {
-          basePath: this.nextConfig.basePath,
-          i18n: this.nextConfig.i18n,
-          trailingSlash: this.nextConfig.trailingSlash,
+    const { signal: edgeSignal, cleanup: cleanupEdgeSignal } =
+      signalFromNodeResponse(params.res.originalResponse)
+    try {
+      const result = await run({
+        distDir: this.distDir,
+        name: edgeInfo.name,
+        paths: edgeInfo.paths,
+        edgeFunctionEntry: edgeInfo,
+        request: {
+          headers: params.req.headers,
+          method: params.req.method,
+          nextConfig: {
+            basePath: this.nextConfig.basePath,
+            i18n: this.nextConfig.i18n,
+            trailingSlash: this.nextConfig.trailingSlash,
+          },
+          url,
+          page: {
+            name: params.page,
+            ...(params.params && { params: params.params }),
+          },
+          body: getRequestMeta(params.req, 'clonableBody'),
+          signal: edgeSignal,
+          waitUntil: this.getWaitUntil(),
         },
-        url,
-        page: {
-          name: params.page,
-          ...(params.params && { params: params.params }),
-        },
-        body: getRequestMeta(params.req, 'clonableBody'),
-        signal: signalFromNodeResponse(params.res.originalResponse),
-        waitUntil: this.getWaitUntil(),
-      },
-      useCache: true,
-      onError: params.onError,
-      onWarning: params.onWarning,
-      incrementalCache:
-        (globalThis as any).__incrementalCache ||
-        getRequestMeta(params.req, 'incrementalCache'),
-      serverComponentsHmrCache: getRequestMeta(
-        params.req,
-        'serverComponentsHmrCache'
-      ),
-    })
+        useCache: true,
+        onError: params.onError,
+        onWarning: params.onWarning,
+        incrementalCache:
+          (globalThis as any).__incrementalCache ||
+          getRequestMeta(params.req, 'incrementalCache'),
+        serverComponentsHmrCache: getRequestMeta(
+          params.req,
+          'serverComponentsHmrCache'
+        ),
+      })
 
-    if (result.fetchMetrics) {
-      params.req.fetchMetrics = result.fetchMetrics
-    }
-
-    if (!params.res.statusCode || params.res.statusCode < 400) {
-      params.res.statusCode = result.response.status
-      params.res.statusMessage = result.response.statusText
-    }
-
-    // TODO: (wyattjoh) investigate improving this
-
-    result.response.headers.forEach((value, key) => {
-      // The append handling is special cased for `set-cookie`.
-      if (key.toLowerCase() === 'set-cookie') {
-        // TODO: (wyattjoh) replace with native response iteration when we can upgrade undici
-        for (const cookie of splitCookiesString(value)) {
-          params.res.appendHeader(key, cookie)
-        }
-      } else {
-        params.res.appendHeader(key, value)
+      if (result.fetchMetrics) {
+        params.req.fetchMetrics = result.fetchMetrics
       }
-    })
 
-    const { originalResponse } = params.res
-    if (result.response.body) {
-      await pipeToNodeResponse(result.response.body, originalResponse)
-    } else {
-      originalResponse.end()
+      if (!params.res.statusCode || params.res.statusCode < 400) {
+        params.res.statusCode = result.response.status
+        params.res.statusMessage = result.response.statusText
+      }
+
+      // TODO: (wyattjoh) investigate improving this
+
+      result.response.headers.forEach((value, key) => {
+        // The append handling is special cased for `set-cookie`.
+        if (key.toLowerCase() === 'set-cookie') {
+          // TODO: (wyattjoh) replace with native response iteration when we can upgrade undici
+          for (const cookie of splitCookiesString(value)) {
+            params.res.appendHeader(key, cookie)
+          }
+        } else {
+          params.res.appendHeader(key, value)
+        }
+      })
+
+      const { originalResponse } = params.res
+      if (result.response.body) {
+        await pipeToNodeResponse(result.response.body, originalResponse)
+      } else {
+        originalResponse.end()
+      }
+
+      return result
+    } finally {
+      // Clean up the abort signal event listeners to prevent memory leaks
+      cleanupEdgeSignal()
     }
-
-    return result
   }
 
   protected get serverDistDir(): string {

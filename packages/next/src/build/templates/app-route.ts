@@ -440,7 +440,7 @@ export async function handler(
       await sendResponse(
         nodeNextReq,
         nodeNextRes,
-        new Response(cacheEntry.value.body, {
+        new Response(cacheEntry.value.body as BodyInit, {
           headers,
           status: cacheEntry.value.status || 200,
         })

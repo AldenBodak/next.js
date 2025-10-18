@@ -216,9 +216,10 @@ export async function handler(
   const nodeNextReq = new NodeNextRequest(req)
   const nodeNextRes = new NodeNextResponse(res)
 
+  const { signal: routeSignal } = signalFromNodeResponse(res)
   const nextReq = NextRequestAdapter.fromNodeNextRequest(
     nodeNextReq,
-    signalFromNodeResponse(res)
+    routeSignal
   )
 
   try {
@@ -439,7 +440,6 @@ export async function handler(
       await sendResponse(
         nodeNextReq,
         nodeNextRes,
-        // @ts-expect-error - Argument of type 'Buffer<ArrayBufferLike>' is not assignable to parameter of type 'BodyInit | null | undefined'.
         new Response(cacheEntry.value.body, {
           headers,
           status: cacheEntry.value.status || 200,

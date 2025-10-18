@@ -56,9 +56,10 @@ export async function exportAppRoute(
   req.url = `http://localhost:3000${req.url}`
 
   // Adapt the request and response to the Next.js request and response.
+  const { signal: exportSignal } = signalFromNodeResponse(res)
   const request = NextRequestAdapter.fromNodeNextRequest(
     new NodeNextRequest(req),
-    signalFromNodeResponse(res)
+    exportSignal
   )
 
   const afterRunner = new AfterRunner()
